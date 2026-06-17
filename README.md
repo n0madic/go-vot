@@ -21,7 +21,8 @@ under `cmd/vot-cli/`.
   services work out of the box; Vimeo resolves duration via its API; the rest are
   registered with an extensible helper interface).
 - Subtitle conversion between Yandex JSON, SRT and VTT.
-- CLI: polling with progress, audio (mp3) and subtitle download, optional ffmpeg
+- CLI: polling with progress, audio (mp3) and subtitle download (files named by
+  the video title, resolved via yt-dlp or YouTube oEmbed), optional ffmpeg
   muxing that mixes the translation over the original audio (with a second,
   untouched original track) — the real Yandex voice-over experience. Ducking is
   either `classic` (constant) or `smart` (adaptive, via `sidechaincompress`).
@@ -49,17 +50,24 @@ vot-cli [options] <link> [link2 ...]
   --lang=<src>          source video language (default: auto)
   --reslang=<dst>       target TTS language: ru, en or kk (default: ru)
   --output=<dir>        directory to save files into (default: .)
-  --output-file=<name>  output filename (requires --output)
+  --output-file=<name>  output filename (requires --output; ignored for many links)
+  --batch-file=<path>   read links from a file, one per line (# comments ignored)
   --subs                download subtitles instead of audio
   --subs-srt            save subtitles as .srt (default: .vtt)
   --proxy=<url>         HTTP/HTTPS proxy URL
   --worker              route requests through the VOT worker proxy (geo bypass)
+  --clone               use Yandex voice cloning ("lively voice"); needs a token,
+                        only works English→Russian
+  --token=<oauth>       Yandex account OAuth token for --clone
+                        (falls back to $VOT_TOKEN or $YANDEX_OAUTH)
   --video-mux[=<file|url>] mux the translation over the source video via ffmpeg;
                         bare --video-mux fetches the source with yt-dlp (or the
                         media URL for direct links); --video-mux=<file|url> sets
                         the source explicitly
   --orig-volume=<0..1>  level of the original audio under the translation
                         when muxing (default: 0.3)
+  --clean               after muxing, delete the intermediate files (downloaded
+                        audio + source), keeping only the final <title>.mp4
   --duck=<classic|smart> ducking mode when muxing (default: classic):
                         classic — original at a constant --orig-volume;
                         smart — original kept at the --orig-volume baseline and
@@ -75,6 +83,10 @@ vot-cli [options] <link> [link2 ...]
 # Translate a YouTube video to Russian and download the mp3
 vot-cli --reslang=ru https://youtu.be/dQw4w9WgXcQ
 
+# Batch: several links at once, or from a file
+vot-cli --reslang=ru https://youtu.be/ID1 https://youtu.be/ID2
+vot-cli --reslang=ru --batch-file=links.txt
+
 # Download translated subtitles as SRT
 vot-cli --subs --subs-srt --reslang=ru https://youtu.be/dQw4w9WgXcQ
 
@@ -83,10 +95,20 @@ vot-cli --worker --reslang=en https://youtu.be/dQw4w9WgXcQ
 
 # Mux translated audio into a direct .mp4 link
 vot-cli --video-mux --reslang=ru "https://example.com/clip.mp4"
+
+# Voice cloning ("lively voice") — English→Russian, needs a Yandex OAuth token
+export YANDEX_OAUTH="y0_..."   # or VOT_TOKEN; --token overrides both
+vot-cli --clone --reslang=ru https://youtu.be/dQw4w9WgXcQ
 ```
 
 > Yandex geo-restricts some regions (e.g. UA/LV/LT). Use `--proxy` or `--worker`
 > if direct requests fail.
+
+> **Voice cloning** (`--clone`) is Yandex's "lively voice" that preserves the
+> original speaker's voice. It only supports the **English→Russian** pair and
+> requires a **Yandex account OAuth token** — pass `--token`, or set `$VOT_TOKEN`
+> / `$YANDEX_OAUTH`. The source language is forced to English automatically.
+> Without a valid token Yandex rejects the cloned-voice request.
 
 ## Library usage
 

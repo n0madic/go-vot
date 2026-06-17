@@ -106,7 +106,11 @@ func (c *Client) translateVideoYA(ctx context.Context, p TranslateParams) (*Tran
 
 	switch resp.Status {
 	case yaproto.StatusFailed:
-		return nil, &VOTError{Msg: "yandex couldn't translate video", Data: derefStr(resp.Message)}
+		msg := "yandex couldn't translate video"
+		if m := derefStr(resp.Message); m != "" {
+			msg += ": " + m
+		}
+		return nil, &VOTError{Msg: msg, Data: derefStr(resp.Message)}
 	case yaproto.StatusFinished, yaproto.StatusPartContent:
 		if resp.URL == nil || *resp.URL == "" {
 			return nil, &VOTError{Msg: "audio link wasn't received from yandex response"}
@@ -185,7 +189,11 @@ func (c *Client) translateVideoVOT(ctx context.Context, p TranslateParams, provi
 
 	switch resp.Status {
 	case "failed":
-		return nil, &VOTError{Msg: "yandex couldn't translate video", Data: resp.Message}
+		msg := "yandex couldn't translate video"
+		if resp.Message != "" {
+			msg += ": " + resp.Message
+		}
+		return nil, &VOTError{Msg: msg, Data: resp.Message}
 	case "success":
 		if resp.TranslatedURL == "" {
 			return nil, &VOTError{Msg: "audio link wasn't received from VOT response"}

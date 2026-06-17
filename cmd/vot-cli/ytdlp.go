@@ -24,6 +24,8 @@ func ytdlpDownload(ctx context.Context, link, outDir, baseName string) (string, 
 	args := []string{
 		"-f", "bv*+ba/b",
 		"--no-playlist",
+		"--retries", "10",
+		"--fragment-retries", "10",
 		"-o", outTmpl,
 		"--no-simulate",
 		"--print", "after_move:filepath",
@@ -45,6 +47,23 @@ func ytdlpDownload(ctx context.Context, link, outDir, baseName string) (string, 
 		return matches[0], nil
 	}
 	return "", fmt.Errorf("yt-dlp did not report an output file")
+}
+
+// ytdlpTitle returns the video title via yt-dlp without downloading anything.
+// Returns "" if yt-dlp is unavailable or the lookup fails.
+func ytdlpTitle(ctx context.Context, link string) string {
+	if !ytdlpAvailable() {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, "yt-dlp",
+		"--skip-download", "--no-playlist", "--quiet", "--no-warnings",
+		"--print", "title", link)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return lastNonEmptyLine(out.String())
 }
 
 func lastNonEmptyLine(s string) string {

@@ -5,14 +5,34 @@ package vot
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/n0madic/go-vot/pkg/client"
 	"github.com/n0madic/go-vot/pkg/service"
 	"github.com/n0madic/go-vot/pkg/yaproto"
 )
+
+// shouldRetryWithoutLively reports whether a failed cloning translation should
+// be retried with the normal voice. The userscript only keys off the specific
+// "обычная озвучка" message, but Yandex also rejects cloning for some videos
+// with a generic "couldn't translate" error — in both cases the normal voice is
+// the right fallback, so we trigger on any FAILED translation here.
+func shouldRetryWithoutLively(err error) bool {
+	var ve *client.VOTError
+	if !errors.As(err, &ve) {
+		return false
+	}
+	msg := strings.ToLower(ve.Msg)
+	if s, ok := ve.Data.(string); ok {
+		msg += " " + strings.ToLower(s)
+	}
+	return strings.Contains(msg, "обычная озвучка") ||
+		strings.Contains(msg, "couldn't translate video")
+}
 
 // Options configures a Client.
 type Options struct {
@@ -117,10 +137,22 @@ func (v *Client) Translate(ctx context.Context, rawURL string, opts TranslateOpt
 		},
 	}
 
+	livelyFallbackTried := false
 	first := true
 	for {
 		res, err := v.c.TranslateVideo(ctx, params)
 		if err != nil {
+			// If voice cloning ("lively voice") failed for this video, fall back
+			// to the normal voice and retry (as the userscript does).
+			if params.ExtraOpts.UseLivelyVoice && !livelyFallbackTried && shouldRetryWithoutLively(err) {
+				livelyFallbackTried = true
+				params.ExtraOpts.UseLivelyVoice = false
+				if opts.OnProgress != nil {
+					opts.OnProgress("voice cloning failed, falling back to normal voice", 0)
+				}
+				first = true
+				continue
+			}
 			return nil, err
 		}
 		if res.Translated {

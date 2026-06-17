@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -60,13 +61,17 @@ func main() {
 		flagLang       = flag.String("lang", "auto", "source video language")
 		flagResLang    = flag.String("reslang", "ru", "target (TTS) language: ru, en or kk")
 		flagOutput     = flag.String("output", ".", "directory to save files into")
-		flagOutputFile = flag.String("output-file", "", "output filename (requires --output)")
+		flagOutputFile = flag.String("output-file", "", "output filename (requires --output; ignored for multiple links)")
+		flagBatchFile  = flag.String("batch-file", "", "read video links from a file, one per line (# comments and blank lines ignored)")
 		flagSubs       = flag.Bool("subs", false, "download subtitles instead of audio")
 		flagSubsSrt    = flag.Bool("subs-srt", false, "save subtitles as .srt (default: .vtt)")
 		flagProxy      = flag.String("proxy", "", "HTTP/HTTPS proxy URL")
 		flagWorker     = flag.Bool("worker", false, "route requests through the VOT worker proxy (geo bypass)")
+		flagClone      = flag.Bool("clone", false, "use Yandex voice cloning (\"lively voice\"): requires --token and only works en→ru")
+		flagToken      = flag.String("token", "", "Yandex account OAuth token for --clone (falls back to $VOT_TOKEN or $YANDEX_OAUTH)")
 		flagOrigVolume = flag.Float64("orig-volume", 0.3, "level of the original audio under the translation when muxing (0–1)")
 		flagDuck       = flag.String("duck", "classic", "ducking mode when muxing: \"classic\" (constant) or \"smart\" (adaptive, ffmpeg sidechaincompress)")
+		flagClean      = flag.Bool("clean", false, "after muxing, delete the intermediate files (downloaded audio and source), keeping only the final video (named <title>.mp4)")
 		flagURLOnly    = flag.Bool("url-only", false, "print the result URL without downloading")
 		flagVersion    = flag.Bool("version", false, "print version and exit")
 	)
@@ -95,6 +100,13 @@ func main() {
 	}
 
 	links := flag.Args()
+	if *flagBatchFile != "" {
+		fileLinks, err := readLinksFile(*flagBatchFile)
+		if err != nil {
+			fatal(fmt.Errorf("batch file: %w", err))
+		}
+		links = append(links, fileLinks...)
+	}
 	if len(links) == 0 {
 		flag.Usage()
 		os.Exit(1)
@@ -102,6 +114,12 @@ func main() {
 
 	wantSubs := *flagSubs
 	subsSrt := *flagSubsSrt
+
+	// Resolve the OAuth token: --token wins, else fall back to env vars.
+	token := *flagToken
+	if token == "" {
+		token = firstNonEmpty(os.Getenv("VOT_TOKEN"), os.Getenv("YANDEX_OAUTH"))
+	}
 
 	if !lang.IsAvailableTTS(*flagResLang) {
 		fmt.Fprintf(os.Stderr, "warning: target language %q is not in the known TTS list %v; trying anyway\n", *flagResLang, lang.AvailableTTS)
@@ -111,6 +129,17 @@ func main() {
 	}
 	if *flagDuck != "classic" && *flagDuck != "smart" {
 		fatal(fmt.Errorf("--duck must be \"classic\" or \"smart\", got %q", *flagDuck))
+	}
+	if *flagClean && !muxFlag.set {
+		fmt.Fprintln(os.Stderr, "warning: --clean has no effect without --video-mux")
+	}
+	if *flagClone {
+		if token == "" {
+			fatal(errors.New("--clone requires a Yandex OAuth token: pass --token, or set $VOT_TOKEN / $YANDEX_OAUTH"))
+		}
+		if *flagResLang != "ru" {
+			fatal(errors.New("--clone (voice cloning) only supports English→Russian; use --reslang=ru"))
+		}
 	}
 
 	httpClient, err := buildHTTPClient(*flagProxy)
@@ -123,9 +152,16 @@ func main() {
 		ResponseLang: *flagResLang,
 		Proxy:        *flagProxy,
 		Worker:       *flagWorker,
+		APIToken:     token,
 	})
 	if err != nil {
 		fatal(err)
+	}
+
+	outputFile := *flagOutputFile
+	if len(links) > 1 && outputFile != "" {
+		fmt.Fprintln(os.Stderr, "warning: --output-file is ignored for multiple links")
+		outputFile = ""
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -137,17 +173,22 @@ func main() {
 		lang:       *flagLang,
 		resLang:    *flagResLang,
 		output:     *flagOutput,
-		outputFile: *flagOutputFile,
+		outputFile: outputFile,
 		subsSrt:    subsSrt,
 		mux:        muxFlag.set,
 		video:      muxFlag.source,
 		origVolume: *flagOrigVolume,
 		duckSmart:  *flagDuck == "smart",
+		clone:      *flagClone,
+		clean:      *flagClean,
 		urlOnly:    *flagURLOnly,
 	}
 
 	exitCode := 0
-	for _, link := range links {
+	for i, link := range links {
+		if len(links) > 1 {
+			fmt.Printf("[%d/%d] ", i+1, len(links))
+		}
 		var err error
 		if wantSubs {
 			err = app.processSubtitles(ctx, link)
@@ -158,8 +199,33 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %s: %v\n", link, err)
 			exitCode = 1
 		}
+		if ctx.Err() != nil { // interrupted (Ctrl-C): stop the batch
+			break
+		}
 	}
 	os.Exit(exitCode)
+}
+
+// readLinksFile reads video links from a file, one per line. Blank lines and
+// lines starting with '#' are ignored.
+func readLinksFile(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var links []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		links = append(links, line)
+	}
+	return links, sc.Err()
 }
 
 type app struct {
@@ -174,15 +240,26 @@ type app struct {
 	video      string
 	origVolume float64
 	duckSmart  bool
+	clone      bool
+	clean      bool
 	urlOnly    bool
 }
 
 func (a *app) processAudio(ctx context.Context, link string) error {
 	fmt.Printf("→ %s\n", link)
 
+	reqLang := a.lang
+	if a.clone {
+		// Yandex voice cloning ("lively voice") only supports the en→ru pair and
+		// forces the request source language to English.
+		reqLang = "en"
+		fmt.Println("  voice cloning (lively voice) enabled (en→ru)")
+	}
+
 	res, err := a.v.Translate(ctx, link, vot.TranslateOptions{
-		RequestLang:  a.lang,
-		ResponseLang: a.resLang,
+		RequestLang:    reqLang,
+		ResponseLang:   a.resLang,
+		UseLivelyVoice: a.clone,
 		OnProgress: func(status string, remaining int32) {
 			if remaining > 0 {
 				fmt.Printf("  %s, waiting ~%ds...\n", status, remaining)
@@ -203,7 +280,7 @@ func (a *app) processAudio(ctx context.Context, link string) error {
 	if err := os.MkdirAll(a.output, 0o755); err != nil {
 		return err
 	}
-	name := a.baseName(res.VideoData.Title, res.VideoData.VideoID)
+	name := sanitize(resolveTitle(ctx, a.http, link, res.VideoData))
 	dest := filepath.Join(a.output, fileNameOr(a.outputFile, name+".mp3"))
 
 	n, err := downloadFile(ctx, a.http, res.URL, dest)
@@ -213,6 +290,10 @@ func (a *app) processAudio(ctx context.Context, link string) error {
 	fmt.Printf("  saved %s (%s)\n", dest, humanSize(n))
 
 	if a.mux {
+		// Intermediates are the files we created and may delete with --clean.
+		// A user-supplied source (a.video) and remote URLs are never deleted.
+		intermediates := []string{dest}
+
 		videoSource := a.video
 		if videoSource == "" {
 			switch {
@@ -220,17 +301,25 @@ func (a *app) processAudio(ctx context.Context, link string) error {
 				videoSource = res.VideoData.URL
 			case ytdlpAvailable():
 				fmt.Println("  downloading source video with yt-dlp...")
-				p, err := ytdlpDownload(ctx, link, a.output, name+".source")
+				p, err := ytdlpDownload(ctx, ytdlpSourceURL(res.VideoData, link), a.output, name+".source")
 				if err != nil {
 					return err
 				}
 				videoSource = p
+				intermediates = append(intermediates, p)
 				fmt.Printf("  source video: %s\n", videoSource)
 			default:
 				return errors.New("--video-mux needs a <file|url> value for non-direct services (or install yt-dlp to fetch the source automatically)")
 			}
 		}
-		out := filepath.Join(a.output, name+".mux.mp4")
+
+		// With --clean the muxed file is the only output, so drop the .mux infix.
+		suffix := ".mux.mp4"
+		if a.clean {
+			suffix = ".mp4"
+		}
+		out := filepath.Join(a.output, name+suffix)
+
 		duckMode := "classic"
 		if a.duckSmart {
 			duckMode = "smart"
@@ -249,6 +338,17 @@ func (a *app) processAudio(ctx context.Context, link string) error {
 			return err
 		}
 		fmt.Printf("  muxed %s\n", out)
+
+		if a.clean {
+			for _, f := range intermediates {
+				if f == out {
+					continue // never delete the final output
+				}
+				if err := os.Remove(f); err == nil {
+					fmt.Printf("  removed %s\n", f)
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -302,7 +402,7 @@ func (a *app) processSubtitles(ctx context.Context, link string) error {
 	if err := os.MkdirAll(a.output, 0o755); err != nil {
 		return err
 	}
-	name := a.baseName(vd.Title, vd.VideoID)
+	name := sanitize(resolveTitle(ctx, a.http, link, vd))
 	dest := filepath.Join(a.output, fileNameOr(a.outputFile, fmt.Sprintf("%s.%s.%s", name, srcLang, format)))
 	if err := os.WriteFile(dest, converted, 0o644); err != nil {
 		return err
@@ -311,24 +411,25 @@ func (a *app) processSubtitles(ctx context.Context, link string) error {
 	return nil
 }
 
-func (a *app) baseName(title, fallback string) string {
-	if title != "" {
-		return sanitize(title)
-	}
-	return sanitize(fallback)
-}
+var (
+	// fsUnsafeChars are characters not allowed in filenames on common OSes.
+	fsUnsafeChars = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]+`)
+	whitespaceRun = regexp.MustCompile(`\s+`)
+)
 
-var unsafeChars = regexp.MustCompile(`[^\w.\-]+`)
-
+// sanitize turns an arbitrary title into a safe filename while preserving
+// Unicode letters/digits (so Cyrillic and other scripts survive).
 func sanitize(s string) string {
 	s = strings.TrimSpace(s)
-	s = unsafeChars.ReplaceAllString(s, "_")
+	s = fsUnsafeChars.ReplaceAllString(s, "")
+	s = whitespaceRun.ReplaceAllString(s, "_")
 	s = strings.Trim(s, "_.")
 	if s == "" {
 		return "video"
 	}
-	if len(s) > 100 {
-		s = s[:100]
+	// Cap by runes, not bytes, to avoid splitting multibyte characters.
+	if r := []rune(s); len(r) > 120 {
+		s = strings.Trim(string(r[:120]), "_.")
 	}
 	return s
 }
@@ -338,6 +439,15 @@ func fileNameOr(name, def string) string {
 		return name
 	}
 	return def
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func buildHTTPClient(proxy string) (*http.Client, error) {
