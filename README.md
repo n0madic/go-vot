@@ -17,9 +17,12 @@ under `cmd/vot-cli/`.
   (translate, audio upload, subtitles, cache, stream, ping).
 - Two transports: the Yandex protobuf API and the FOSWLY VOT backend (for direct
   media links), plus a worker-proxy mode for geo-blocked regions.
-- Service detection for ~55 video services (YouTube and all simple URL-pattern
-  services work out of the box; Vimeo resolves duration via its API; the rest are
-  registered with an extensible helper interface).
+- Service detection for ~55 video services. YouTube and all simple URL-pattern
+  services work out of the box; services needing an HTTP lookup are implemented
+  too (Vimeo, Twitch clips, mail.ru, Kick, Odysee, PeerTube, Cloudflare Stream,
+  banned.video, BitView, IGN, Apple Developer, Epic Games, Yandex.Disk). The
+  remaining scraping-heavy/auth-gated services are registered behind an extensible
+  helper interface.
 - Subtitle conversion between Yandex JSON, SRT and VTT.
 - CLI: polling with progress, audio (mp3) and subtitle download (files named by
   the video title, resolved via yt-dlp or YouTube oEmbed), optional ffmpeg
@@ -163,12 +166,13 @@ func main() {
 
 ## Extending service support
 
-Some services that need site-specific HTTP scraping (e.g. Yandex.Disk, Reddit,
-Patreon) are registered in `pkg/service` but return `ErrNotImplemented` until a
-helper is added. To support one, add an entry to the `helpers` map in
-`pkg/service/helpers.go` implementing the `id` (and optionally `data`) function;
-the `id` extractor receives a context and HTTP `Fetcher` so it can resolve ids
-that require a network round-trip (as Twitch clips and mail.ru embeds do).
+Some services that need heavier scraping or signed/authenticated requests (e.g.
+Reddit, Kodik, Weverse, Patreon, LinkedIn) are registered in `pkg/service` but
+return `ErrNotImplemented` until a helper is added. To support one, add an entry
+to the `helpers` map in `pkg/service/helpers.go` implementing the `id` (and
+optionally `data`) function; the `id` extractor receives a context and HTTP
+`Fetcher` so it can resolve ids that require a network round-trip (as Twitch
+clips and mail.ru embeds do), and the `data` function fetches duration/title/URL.
 
 ## Testing
 

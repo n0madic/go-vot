@@ -3,10 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 )
 
@@ -15,36 +12,21 @@ import (
 // Ported from @vot.js/node/helpers/twitch.js getClipLink.
 func twitchClipLink(ctx context.Context, f Fetcher, u *url.URL) (string, error) {
 	clearPathname := strings.TrimPrefix(u.Path, "/")
-	var videoPath string
+	videoPath := clearPathname
 	if clearPathname == "embed" {
 		videoPath = u.Query().Get("clip")
-	} else {
-		videoPath = clearPathname
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://clips.twitch.tv/"+videoPath, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "Googlebot/2.1 (+http://www.googlebot.com/bot.html)")
-
-	resp, err := f.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("twitch clip: unexpected status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := getText(ctx, f, "https://clips.twitch.tv/"+videoPath, map[string]string{
+		"User-Agent": "Googlebot/2.1 (+http://www.googlebot.com/bot.html)",
+	})
 	if err != nil {
 		return "", err
 	}
 
-	m := regexp.MustCompile(`"url":"https://www\.twitch\.tv/([^"]+)"`).FindSubmatch(body)
-	if m == nil {
+	channel := reFind(`"url":"https://www\.twitch\.tv/([^"]+)"`, body, 1)
+	if channel == "" {
 		return "", fmt.Errorf("twitch clip: channel link not found in page")
 	}
-	return string(m[1]) + "/clip/" + videoPath, nil
+	return channel + "/clip/" + videoPath, nil
 }

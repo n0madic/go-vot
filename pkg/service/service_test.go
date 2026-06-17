@@ -69,6 +69,18 @@ func TestVideoIDExtraction(t *testing.T) {
 		// kick — path-parse only
 		{"kick", "https://kick.com/somechannel/videos/abc-def", "videos/abc-def"},
 		{"kick", "https://kick.com/somechannel/clips/clip_xyz", "clips/clip_xyz"},
+		// Tier 0/1/2 additions — path-parse only (network branches verified E2E).
+		{HostPeertube, "https://makertube.net/w/abc123", "/w/abc123"},
+		{HostCloudflareStream, "https://watch.cloudflarestream.com/vid42?x=1", "/vid42?x=1"},
+		{"odysee", "https://odysee.com/@chan:1/video:2", "@chan:1/video:2"},
+		{"appledeveloper", "https://developer.apple.com/videos/play/wwdc2023/10042/", "videos/play/wwdc2023/10042"},
+		{"bannedvideo", "https://madmaxworld.tv/watch?id=abc123", "abc123"},
+		{"bitview", "https://www.bitview.net/watch?v=xyz789", "xyz789"},
+		{"epicgames", "https://dev.epicgames.com/community/learning/tutorials/1pV5/some-title", "1pV5"},
+		{"ign", "https://www.ign.com/de/672382/video/destiny-trailer", "de/672382/video/destiny-trailer"},
+		{"ign", "https://www.ign.com/videos/some-slug", "/videos/some-slug"},
+		{"yandexdisk", "https://disk.yandex.ru/i/abc123", "/i/abc123"},
+		{"yandexdisk", "https://disk.yandex.ru/d/hashonly", "/d/hashonly"},
 	}
 	for _, c := range cases {
 		h, ok := helpers[c.host]

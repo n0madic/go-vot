@@ -2,34 +2,9 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
-
-	"github.com/n0madic/go-vot/pkg/config"
 )
-
-// getJSON performs a GET request and decodes the JSON response into out.
-func getJSON(ctx context.Context, f Fetcher, rawURL string, headers map[string]string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", config.UserAgent)
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := f.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
-}
 
 // vimeoData resolves a Vimeo video's title/link/duration via the public viewer
 // JWT and the Vimeo API. The private-player path is not ported; on any failure

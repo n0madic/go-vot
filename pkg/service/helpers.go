@@ -149,6 +149,22 @@ func pathSlice(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 	return strings.TrimPrefix(u.Path, "/"), nil
 }
 
+// peertubeID extracts the "/w/<id>" path of a PeerTube watch URL. The final URL
+// is origin + this id (baseURL is set to the instance origin in GetVideoData).
+func peertubeID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+	return reFind(`/w/([^/]+)`, u.Path, 0), nil
+}
+
+// cloudflareStreamID returns the path and query of a Cloudflare Stream embed URL,
+// appended to the instance origin to form the final URL.
+func cloudflareStreamID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+	id := u.Path
+	if u.RawQuery != "" {
+		id += "?" + u.RawQuery
+	}
+	return id, nil
+}
+
 // helpers maps a service host to its extractor(s). Only services with an entry
 // here can resolve a video id; the rest return ErrNotImplemented.
 var helpers = map[string]helper{
@@ -231,5 +247,14 @@ var helpers = map[string]helper{
 	"telegram": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 		return reFind(`([^/]+)/(\d+)`, u.Path, 0), nil
 	}},
-	"kick": {id: kickID, data: kickData},
+	"kick":               {id: kickID, data: kickData},
+	HostPeertube:         {id: peertubeID},
+	HostCloudflareStream: {id: cloudflareStreamID},
+	"odysee":             {id: odyseeID, data: odyseeData},
+	"appledeveloper":     {id: appleDeveloperID, data: appleDeveloperData},
+	"bannedvideo":        {id: bannedVideoID, data: bannedVideoData},
+	"bitview":            {id: bitviewID, data: bitviewData},
+	"epicgames":          {id: epicGamesID, data: epicGamesData},
+	"ign":                {id: ignID, data: ignData},
+	"yandexdisk":         {id: yandexDiskID, data: yandexDiskData},
 }
