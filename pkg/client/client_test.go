@@ -3,13 +3,18 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
 
+	"github.com/n0madic/go-vot/pkg/config"
 	"github.com/n0madic/go-vot/pkg/yaproto"
 )
 
@@ -167,4 +172,68 @@ func TestWorkerWrapsBody(t *testing.T) {
 		t.Errorf("worker body envelope missing headers/body: %s", gotBody)
 	}
 	_ = gotPath
+}
+
+// TestWorkerRequestJSONBodyIsString verifies the worker JSON envelope carries the
+// body as a JSON string value (matching upstream VOTWorkerClient.requestJSON),
+// not as a nested JSON object.
+func TestWorkerRequestJSONBodyIsString(t *testing.T) {
+	var gotBody []byte
+	doer := fakeDoer{fn: func(r *http.Request) (*http.Response, error) {
+		gotBody, _ = io.ReadAll(r.Body)
+		return makeResp(200, []byte(`{"status":1}`)), nil
+	}}
+	c, _ := New(Options{Doer: doer, Worker: true})
+	if err := c.RequestVtransFailAudio(context.Background(), "https://youtu.be/x"); err != nil {
+		t.Fatal(err)
+	}
+
+	var env struct {
+		Headers map[string]string `json:"headers"`
+		Body    json.RawMessage   `json:"body"`
+	}
+	if err := json.Unmarshal(gotBody, &env); err != nil {
+		t.Fatalf("envelope not valid JSON: %v (%s)", err, gotBody)
+	}
+	if len(env.Body) == 0 || env.Body[0] != '"' {
+		t.Fatalf("worker envelope body should be a JSON string, got %s", env.Body)
+	}
+	var inner string
+	if err := json.Unmarshal(env.Body, &inner); err != nil {
+		t.Fatalf("body is not a JSON string: %v", err)
+	}
+	if !strings.Contains(inner, `"video_url"`) || !strings.Contains(inner, "https://youtu.be/x") {
+		t.Errorf("inner body = %q, want the fail-audio JSON", inner)
+	}
+}
+
+// TestGetSessionConcurrentSingleCreate verifies that concurrent callers for the
+// same module create exactly one session (no TOCTOU duplicate creation).
+func TestGetSessionConcurrentSingleCreate(t *testing.T) {
+	var creates int32
+	doer := fakeDoer{fn: func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == paths.session {
+			atomic.AddInt32(&creates, 1)
+			time.Sleep(10 * time.Millisecond) // widen the race window
+			return makeResp(200, sessionRespBytes("sk", 3600)), nil
+		}
+		t.Errorf("unexpected path %s", r.URL.Path)
+		return nil, nil
+	}}
+	c, _ := New(Options{Doer: doer})
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.getSession(context.Background(), config.SessionModuleVideoTranslation); err != nil {
+				t.Errorf("getSession: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := atomic.LoadInt32(&creates); got != 1 {
+		t.Fatalf("session created %d times, want 1", got)
+	}
 }

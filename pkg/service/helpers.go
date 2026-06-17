@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // helper bundles a video-id extractor and an optional extra-data fetcher for a
@@ -16,9 +17,23 @@ type helper struct {
 	data func(ctx context.Context, f Fetcher, svc *Service, origin, videoID string) (*VideoData, error)
 }
 
+// reCache memoizes compiled regexps so the id extractors (which call reFind with
+// constant patterns on every URL resolution) don't recompile on each call.
+var reCache sync.Map // pattern string -> *regexp.Regexp
+
+// mustRe returns a compiled regexp for the pattern, caching it for reuse.
+func mustRe(pattern string) *regexp.Regexp {
+	if v, ok := reCache.Load(pattern); ok {
+		return v.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(pattern)
+	reCache.Store(pattern, re)
+	return re
+}
+
 // reFind returns the submatch at index from the first match of pattern on s, or "".
 func reFind(pattern, s string, index int) string {
-	m := regexp.MustCompile(pattern).FindStringSubmatch(s)
+	m := mustRe(pattern).FindStringSubmatch(s)
 	if m == nil || index >= len(m) {
 		return ""
 	}
@@ -61,7 +76,7 @@ func vkID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 }
 
 func twitchID(ctx context.Context, f Fetcher, u *url.URL) (string, error) {
-	if regexp.MustCompile(`^player\.twitch\.tv$`).MatchString(u.Hostname()) {
+	if u.Hostname() == "player.twitch.tv" {
 		return "videos/" + u.Query().Get("video"), nil
 	}
 	if clip := reFind(`([^/]+)/(?:clip)/([^/]+)`, u.Path, 0); clip != "" {
@@ -99,7 +114,7 @@ func vimeoID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 }
 
 func mailruID(ctx context.Context, f Fetcher, u *url.URL) (string, error) {
-	if regexp.MustCompile(`/(v|mail|bk|inbox)/`).MatchString(u.Path) {
+	if mustRe(`/(v|mail|bk|inbox)/`).MatchString(u.Path) {
 		return strings.TrimPrefix(u.Path, "/"), nil
 	}
 	videoID := reFind(`video/embed/([^/]+)`, u.Path, 1)

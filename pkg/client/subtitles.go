@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/n0madic/go-vot/pkg/config"
@@ -54,12 +55,12 @@ func (c *Client) getSubtitlesYA(ctx context.Context, p SubtitlesParams) (*Subtit
 		headers[k] = v
 	}
 
-	data, ok, err := c.request(ctx, paths.videoSubtitles, body, headers, http.MethodPost)
+	data, status, err := c.request(ctx, paths.videoSubtitles, body, headers, http.MethodPost)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, &VOTError{Msg: "failed to request video subtitles", Data: string(data)}
+	if status != http.StatusOK {
+		return nil, &VOTError{Msg: fmt.Sprintf("failed to request video subtitles: HTTP %d", status), Data: string(data)}
 	}
 	var resp yaproto.SubtitlesResponse
 	if err := resp.Unmarshal(data); err != nil {
@@ -88,7 +89,7 @@ type votSubtitle struct {
 func (c *Client) getSubtitlesVOT(ctx context.Context, p SubtitlesParams) (*SubtitlesResult, error) {
 	svc, vid := convertVOT(p.Host, p.VideoID, p.URL)
 	var data []votSubtitle
-	ok, err := c.requestVOT(ctx, paths.videoSubtitles, map[string]any{
+	status, err := c.requestVOT(ctx, paths.videoSubtitles, map[string]any{
 		"provider": "yandex",
 		"service":  svc,
 		"video_id": vid,
@@ -96,8 +97,8 @@ func (c *Client) getSubtitlesVOT(ctx context.Context, p SubtitlesParams) (*Subti
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, &VOTError{Msg: "failed to request video subtitles"}
+	if status != http.StatusOK {
+		return nil, &VOTError{Msg: fmt.Sprintf("failed to request video subtitles: HTTP %d", status)}
 	}
 
 	out := &SubtitlesResult{}

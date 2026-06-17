@@ -91,12 +91,12 @@ func (c *Client) translateVideoYA(ctx context.Context, p TranslateParams) (*Tran
 		headers[k] = v
 	}
 
-	data, ok, err := c.request(ctx, paths.videoTranslation, body, headers, http.MethodPost)
+	data, status, err := c.request(ctx, paths.videoTranslation, body, headers, http.MethodPost)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, &VOTError{Msg: "failed to request video translation", Data: string(data)}
+	if status != http.StatusOK {
+		return nil, &VOTError{Msg: fmt.Sprintf("failed to request video translation: HTTP %d", status), Data: string(data)}
 	}
 
 	var resp yaproto.VideoTranslationResponse
@@ -141,9 +141,21 @@ func (c *Client) translateVideoYA(ctx context.Context, p TranslateParams) (*Tran
 			if _, err := c.RequestVtransAudio(ctx, p.URL, resp.TranslationID, emptyAudio, nil, nil); err != nil {
 				return nil, err
 			}
+			// Retry without re-sending failed audio. Mirror upstream, which omits
+			// extraOpts on the recursive call (so lively-voice/bypass-cache flags
+			// and the OAuth header are not carried into the retry body).
 			no := false
-			retry := p
-			retry.ShouldSendFailedAudio = &no
+			retry := TranslateParams{
+				URL:                   p.URL,
+				VideoID:               p.VideoID,
+				Host:                  p.Host,
+				Duration:              p.Duration,
+				RequestLang:           p.RequestLang,
+				ResponseLang:          p.ResponseLang,
+				TranslationHelp:       p.TranslationHelp,
+				Headers:               p.Headers,
+				ShouldSendFailedAudio: &no,
+			}
 			return c.translateVideoYA(ctx, retry)
 		}
 		return &TranslationResult{
@@ -172,7 +184,7 @@ type votTranslateResponse struct {
 func (c *Client) translateVideoVOT(ctx context.Context, p TranslateParams, provider string) (*TranslationResult, error) {
 	svc, vid := convertVOT(p.Host, p.VideoID, p.URL)
 	var resp votTranslateResponse
-	ok, err := c.requestVOT(ctx, paths.videoTranslation, map[string]any{
+	status, err := c.requestVOT(ctx, paths.videoTranslation, map[string]any{
 		"provider":  provider,
 		"service":   svc,
 		"video_id":  vid,
@@ -183,8 +195,8 @@ func (c *Client) translateVideoVOT(ctx context.Context, p TranslateParams, provi
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, &VOTError{Msg: "failed to request video translation", Data: resp}
+	if status != http.StatusOK {
+		return nil, &VOTError{Msg: fmt.Sprintf("failed to request video translation: HTTP %d", status), Data: resp}
 	}
 
 	switch resp.Status {
@@ -245,12 +257,12 @@ func (c *Client) TranslateVideoCache(ctx context.Context, p TranslateParams) (*y
 		headers[k] = v
 	}
 
-	data, ok, err := c.request(ctx, paths.videoTranslationCache, body, headers, http.MethodPost)
+	data, status, err := c.request(ctx, paths.videoTranslationCache, body, headers, http.MethodPost)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, &VOTError{Msg: "failed to request video translation cache", Data: string(data)}
+	if status != http.StatusOK {
+		return nil, &VOTError{Msg: fmt.Sprintf("failed to request video translation cache: HTTP %d", status), Data: string(data)}
 	}
 	var resp yaproto.VideoTranslationCacheResponse
 	if err := resp.Unmarshal(data); err != nil {

@@ -134,9 +134,12 @@ func yandexDiskDiskData(ctx context.Context, f Fetcher, svc *Service, origin, vi
 }
 
 // yandexDiskBodyHash builds the URL-encoded {hash, sk} body the listing API expects.
-func yandexDiskBodyHash(hash, sk string) []byte {
-	data, _ := json.Marshal(map[string]string{"hash": hash, "sk": sk})
-	return []byte(url.QueryEscape(string(data)))
+func yandexDiskBodyHash(hash, sk string) ([]byte, error) {
+	data, err := json.Marshal(map[string]string{"hash": hash, "sk": sk})
+	if err != nil {
+		return nil, err
+	}
+	return []byte(url.QueryEscape(string(data))), nil
 }
 
 func yandexDiskClearTitle(name string) string {
@@ -148,7 +151,11 @@ func yandexDiskFetchList(ctx context.Context, f Fetcher, apiOrigin, dirHash, sk 
 		Resources []ydResource `json:"resources"`
 		Error     any          `json:"error"`
 	}
-	if err := postJSON(ctx, f, apiOrigin+"/public/api/fetch-list", yandexDiskBodyHash(dirHash, sk), nil, &resp); err != nil {
+	body, err := yandexDiskBodyHash(dirHash, sk)
+	if err != nil {
+		return nil, err
+	}
+	if err := postJSON(ctx, f, apiOrigin+"/public/api/fetch-list", body, nil, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Error != nil {
@@ -164,7 +171,11 @@ func yandexDiskDownloadURL(ctx context.Context, f Fetcher, apiOrigin, fileHash, 
 		} `json:"data"`
 		Error any `json:"error"`
 	}
-	if err := postJSON(ctx, f, apiOrigin+"/public/api/download-url", yandexDiskBodyHash(fileHash, sk), nil, &resp); err != nil {
+	body, err := yandexDiskBodyHash(fileHash, sk)
+	if err != nil {
+		return "", err
+	}
+	if err := postJSON(ctx, f, apiOrigin+"/public/api/download-url", body, nil, &resp); err != nil {
 		return "", err
 	}
 	if resp.Error != nil || resp.Data.URL == "" {

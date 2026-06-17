@@ -6,6 +6,7 @@ package service
 import (
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 // Host identifiers (subset used in branching logic). Values match the upstream
@@ -38,8 +39,6 @@ func inList(list []string) matcher {
 		return ok
 	}
 }
-
-func urlPred(fn func(*url.URL) bool) matcher { return fn }
 
 func anyOf(ms ...matcher) matcher {
 	return func(u *url.URL) bool {
@@ -124,10 +123,10 @@ var sites = []Service{
 	{Host: "pornhub", BaseURL: "https://rt.pornhub.com/view_video.php?viewkey=", Match: reHost(`^[a-z]+.pornhub.(com|org)$`)},
 	{Host: "twitter", BaseURL: "https://twitter.com/i/status/", Match: reHost(`^(twitter|x).com$`)},
 	{Host: "rumble", BaseURL: "https://rumble.com/", Match: reHost(`^rumble.com$`)},
-	{Host: "facebook", BaseURL: "https://facebook.com/", Match: urlPred(func(u *url.URL) bool {
-		return regexp.MustCompile(`facebook\.com`).MatchString(u.Host) &&
-			(regexp.MustCompile(`/videos/`).MatchString(u.Path) || regexp.MustCompile(`/reel/`).MatchString(u.Path))
-	})},
+	{Host: "facebook", BaseURL: "https://facebook.com/", Match: func(u *url.URL) bool {
+		return strings.Contains(u.Host, "facebook.com") &&
+			(strings.Contains(u.Path, "/videos/") || strings.Contains(u.Path, "/reel/"))
+	}},
 	{Host: "rutube", BaseURL: "https://rutube.ru/video/", Match: reHost(`^rutube.ru$`)},
 	{Host: "bilibili", BaseURL: "https://www.bilibili.com/", Match: reHost(`^(www|m|player).bilibili.com$`)},
 	{Host: "mailru", BaseURL: "https://my.mail.ru/", Match: reHost(`^my.mail.ru$`)},
@@ -169,7 +168,7 @@ var sites = []Service{
 	{Host: "bunkr", BaseURL: "https://bunkr.site/", Match: reHost(`^bunkr.(site|black|cat|media|red|site|ws|org|s[kiu]|c[ir]|fi|p[hks]|ru|la|is|to|a[cx])$`), NeedExtraData: true},
 	{Host: "imdb", BaseURL: "https://www.imdb.com/video/", Match: reHost(`^(www.)?imdb.com$`)},
 	{Host: "telegram", BaseURL: "https://t.me/", Match: reHost(`^t.me$`)},
-	{Host: HostCustom, BaseURL: "stub", Match: urlPred(func(u *url.URL) bool { return mp4WebmRe.MatchString(u.Path) }), RawResult: true},
+	{Host: HostCustom, BaseURL: "stub", Match: func(u *url.URL) bool { return mp4WebmRe.MatchString(u.Path) }, RawResult: true},
 }
 
 // Sites returns the service registry (read-only).

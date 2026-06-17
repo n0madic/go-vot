@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -15,6 +16,20 @@ func (c *Client) getSession(ctx context.Context, module string) (secure.Session,
 
 	c.mu.Lock()
 	s, ok := c.sessions[module]
+	c.mu.Unlock()
+	if ok && s.Valid(now) {
+		return s, nil
+	}
+
+	// Serialize creation so concurrent callers for the same module don't each
+	// mint a session (the cache read above is not atomic with the create below).
+	c.createMu.Lock()
+	defer c.createMu.Unlock()
+
+	// Re-check: another goroutine may have created a valid session while we
+	// waited for createMu.
+	c.mu.Lock()
+	s, ok = c.sessions[module]
 	c.mu.Unlock()
 	if ok && s.Valid(now) {
 		return s, nil
@@ -37,14 +52,14 @@ func (c *Client) createSession(ctx context.Context, module string) (secure.Sessi
 	uuid := secure.UUID()
 	body := (&yaproto.YandexSessionRequest{UUID: uuid, Module: module}).Marshal()
 
-	data, ok, err := c.request(ctx, paths.session, body, map[string]string{
+	data, status, err := c.request(ctx, paths.session, body, map[string]string{
 		"Vtrans-Signature": secure.Signature(body),
 	}, http.MethodPost)
 	if err != nil {
 		return secure.Session{}, err
 	}
-	if !ok {
-		return secure.Session{}, &VOTError{Msg: "failed to request create session", Data: string(data)}
+	if status != http.StatusOK {
+		return secure.Session{}, &VOTError{Msg: fmt.Sprintf("failed to request create session: HTTP %d", status), Data: string(data)}
 	}
 
 	var resp yaproto.YandexSessionResponse

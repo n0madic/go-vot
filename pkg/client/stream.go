@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/n0madic/go-vot/pkg/config"
@@ -38,12 +39,12 @@ func (c *Client) PingStream(ctx context.Context, pingID int32, headers map[strin
 	for k, v := range headers {
 		hdrs[k] = v
 	}
-	_, ok, err := c.request(ctx, paths.streamPing, body, hdrs, http.MethodPost)
+	_, status, err := c.request(ctx, paths.streamPing, body, hdrs, http.MethodPost)
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return &VOTError{Msg: "failed to request stream ping"}
+	if status != http.StatusOK {
+		return &VOTError{Msg: fmt.Sprintf("failed to request stream ping: HTTP %d", status)}
 	}
 	return nil
 }
@@ -76,12 +77,12 @@ func (c *Client) TranslateStream(ctx context.Context, p StreamParams) (*StreamRe
 		hdrs[k] = v
 	}
 
-	data, ok, err := c.request(ctx, paths.streamTranslation, body, hdrs, http.MethodPost)
+	data, status, err := c.request(ctx, paths.streamTranslation, body, hdrs, http.MethodPost)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, &VOTError{Msg: "failed to request stream translation", Data: string(data)}
+	if status != http.StatusOK {
+		return nil, &VOTError{Msg: fmt.Sprintf("failed to request stream translation: HTTP %d", status), Data: string(data)}
 	}
 
 	var resp yaproto.StreamTranslationResponse

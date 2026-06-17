@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/n0madic/go-vot/pkg/config"
@@ -20,12 +21,12 @@ func (c *Client) RequestVtransFailAudio(ctx context.Context, videoURL string) er
 	var resp struct {
 		Status int `json:"status"`
 	}
-	ok, err := c.requestJSON(ctx, paths.videoTranslationFailAudio, body, nil, http.MethodPut, &resp)
+	status, err := c.requestJSON(ctx, paths.videoTranslationFailAudio, body, nil, http.MethodPut, &resp)
 	if err != nil {
 		return err
 	}
-	if !ok || resp.Status != 1 {
-		return &VOTError{Msg: "failed to request fake video translation fail audio"}
+	if status != http.StatusOK || resp.Status != 1 {
+		return &VOTError{Msg: fmt.Sprintf("failed to request fake video translation fail audio (HTTP %d, status %d)", status, resp.Status)}
 	}
 	return nil
 }
@@ -52,12 +53,12 @@ func (c *Client) RequestVtransAudio(ctx context.Context, videoURL, translationID
 		hdrs[k] = v
 	}
 
-	data, ok, err := c.request(ctx, paths.videoTranslationAudio, body, hdrs, http.MethodPut)
+	data, status, err := c.request(ctx, paths.videoTranslationAudio, body, hdrs, http.MethodPut)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return nil, &VOTError{Msg: "failed to request video translation audio", Data: string(data)}
+	if status != http.StatusOK {
+		return nil, &VOTError{Msg: fmt.Sprintf("failed to request video translation audio: HTTP %d", status), Data: string(data)}
 	}
 	var resp yaproto.VideoTranslationAudioResponse
 	if err := resp.Unmarshal(data); err != nil {

@@ -31,11 +31,17 @@ func downloadFile(ctx context.Context, hc *http.Client, rawURL, dest string) (in
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
 
 	n, err := io.Copy(f, resp.Body)
+	closeErr := f.Close()
 	if err != nil {
+		// Don't leave a truncated file behind for a later mux step to pick up.
+		os.Remove(dest)
 		return n, fmt.Errorf("write %s: %w", dest, err)
+	}
+	if closeErr != nil {
+		os.Remove(dest)
+		return n, fmt.Errorf("close %s: %w", dest, closeErr)
 	}
 	return n, nil
 }

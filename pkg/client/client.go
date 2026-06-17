@@ -80,6 +80,7 @@ type Client struct {
 	worker             bool
 
 	mu       sync.Mutex
+	createMu sync.Mutex
 	sessions map[string]secure.Session
 }
 
@@ -197,8 +198,8 @@ func (c *Client) RequestLang() string { return c.requestLang }
 func (c *Client) ResponseLang() string { return c.responseLang }
 
 // request performs a protobuf request to the Yandex host and returns the raw
-// response body and whether the status was 200.
-func (c *Client) request(ctx context.Context, path string, body []byte, headers map[string]string, method string) ([]byte, bool, error) {
+// response body and the HTTP status code.
+func (c *Client) request(ctx context.Context, path string, body []byte, headers map[string]string, method string) ([]byte, int, error) {
 	if method == "" {
 		method = http.MethodPost
 	}
@@ -214,7 +215,7 @@ func (c *Client) request(ctx context.Context, path string, body []byte, headers 
 			Body    []int             `json:"body"`
 		}{Headers: merged, Body: bytesToInts(body)})
 		if err != nil {
-			return nil, false, err
+			return nil, 0, err
 		}
 		reqBody = payload
 		reqHeaders["Content-Type"] = "application/json"
@@ -227,7 +228,7 @@ func (c *Client) request(ctx context.Context, path string, body []byte, headers 
 }
 
 // requestJSON performs a JSON request to the Yandex host and decodes into out.
-func (c *Client) requestJSON(ctx context.Context, path string, body []byte, headers map[string]string, method string, out any) (bool, error) {
+func (c *Client) requestJSON(ctx context.Context, path string, body []byte, headers map[string]string, method string, out any) (int, error) {
 	if method == "" {
 		method = http.MethodPost
 	}
@@ -240,14 +241,16 @@ func (c *Client) requestJSON(ctx context.Context, path string, body []byte, head
 		merged = mergeHeaders(merged, headers)
 		var inner any
 		if body != nil {
-			inner = json.RawMessage(body)
+			// Upstream VOTWorkerClient wraps the already-stringified JSON body, so
+			// the envelope's "body" is a JSON string value, not a nested object.
+			inner = string(body)
 		}
 		payload, err := json.Marshal(struct {
 			Headers map[string]string `json:"headers"`
 			Body    any               `json:"body"`
 		}{Headers: merged, Body: inner})
 		if err != nil {
-			return false, err
+			return 0, err
 		}
 		reqBody = payload
 		reqHeaders["Content-Type"] = "application/json"
@@ -258,60 +261,60 @@ func (c *Client) requestJSON(ctx context.Context, path string, body []byte, head
 		reqHeaders = mergeHeaders(reqHeaders, headers)
 	}
 
-	data, ok, err := c.do(ctx, method, endpoint, reqBody, reqHeaders)
+	data, status, err := c.do(ctx, method, endpoint, reqBody, reqHeaders)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
-			return ok, fmt.Errorf("decode json response: %w", err)
+			return status, fmt.Errorf("decode json response: %w", err)
 		}
 	}
-	return ok, nil
+	return status, nil
 }
 
 // requestVOT posts JSON to the FOSWLY VOT backend and decodes into out.
-func (c *Client) requestVOT(ctx context.Context, path string, body any, headers map[string]string, out any) (bool, error) {
+func (c *Client) requestVOT(ctx context.Context, path string, body any, headers map[string]string, out any) (int, error) {
 	endpoint := c.schemaVOT + "://" + c.hostVOT + path
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	reqHeaders := mergeHeaders(c.headersVOT, headers)
-	data, ok, err := c.do(ctx, http.MethodPost, endpoint, payload, reqHeaders)
+	data, status, err := c.do(ctx, http.MethodPost, endpoint, payload, reqHeaders)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
-			return ok, fmt.Errorf("decode vot response: %w", err)
+			return status, fmt.Errorf("decode vot response: %w", err)
 		}
 	}
-	return ok, nil
+	return status, nil
 }
 
-func (c *Client) do(ctx context.Context, method, endpoint string, body []byte, headers map[string]string) ([]byte, bool, error) {
+func (c *Client) do(ctx context.Context, method, endpoint string, body []byte, headers map[string]string) ([]byte, int, error) {
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, rdr)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	resp, err := c.doer.Do(req)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
-	return data, resp.StatusCode == http.StatusOK, nil
+	return data, resp.StatusCode, nil
 }
 
 func mergeHeaders(base, extra map[string]string) map[string]string {
