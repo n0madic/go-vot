@@ -65,6 +65,8 @@ func main() {
 		flagSubsSrt    = flag.Bool("subs-srt", false, "save subtitles as .srt (default: .vtt)")
 		flagProxy      = flag.String("proxy", "", "HTTP/HTTPS proxy URL")
 		flagWorker     = flag.Bool("worker", false, "route requests through the VOT worker proxy (geo bypass)")
+		flagOrigVolume = flag.Float64("orig-volume", 0.3, "level of the original audio under the translation when muxing (0–1)")
+		flagDuck       = flag.String("duck", "classic", "ducking mode when muxing: \"classic\" (constant) or \"smart\" (adaptive, ffmpeg sidechaincompress)")
 		flagURLOnly    = flag.Bool("url-only", false, "print the result URL without downloading")
 		flagVersion    = flag.Bool("version", false, "print version and exit")
 	)
@@ -104,6 +106,12 @@ func main() {
 	if !lang.IsAvailableTTS(*flagResLang) {
 		fmt.Fprintf(os.Stderr, "warning: target language %q is not in the known TTS list %v; trying anyway\n", *flagResLang, lang.AvailableTTS)
 	}
+	if *flagOrigVolume < 0 || *flagOrigVolume > 1 {
+		fatal(fmt.Errorf("--orig-volume must be between 0 and 1, got %v", *flagOrigVolume))
+	}
+	if *flagDuck != "classic" && *flagDuck != "smart" {
+		fatal(fmt.Errorf("--duck must be \"classic\" or \"smart\", got %q", *flagDuck))
+	}
 
 	httpClient, err := buildHTTPClient(*flagProxy)
 	if err != nil {
@@ -133,6 +141,8 @@ func main() {
 		subsSrt:    subsSrt,
 		mux:        muxFlag.set,
 		video:      muxFlag.source,
+		origVolume: *flagOrigVolume,
+		duckSmart:  *flagDuck == "smart",
 		urlOnly:    *flagURLOnly,
 	}
 
@@ -162,6 +172,8 @@ type app struct {
 	subsSrt    bool
 	mux        bool
 	video      string
+	origVolume float64
+	duckSmart  bool
 	urlOnly    bool
 }
 
@@ -219,8 +231,21 @@ func (a *app) processAudio(ctx context.Context, link string) error {
 			}
 		}
 		out := filepath.Join(a.output, name+".mux.mp4")
-		fmt.Printf("  muxing into %s...\n", out)
-		if err := muxAudio(ctx, videoSource, dest, out, lang.ISO6392(a.resLang)); err != nil {
+		duckMode := "classic"
+		if a.duckSmart {
+			duckMode = "smart"
+		}
+		fmt.Printf("  muxing into %s (%s ducking, original at %.0f%%)...\n", out, duckMode, a.origVolume*100)
+		origLang := ""
+		if a.lang != "" && a.lang != "auto" {
+			origLang = lang.ISO6392(a.lang)
+		}
+		if err := muxAudio(ctx, videoSource, dest, out, muxOptions{
+			OrigVolume: a.origVolume,
+			Smart:      a.duckSmart,
+			TransLang:  lang.ISO6392(a.resLang),
+			OrigLang:   origLang,
+		}); err != nil {
 			return err
 		}
 		fmt.Printf("  muxed %s\n", out)

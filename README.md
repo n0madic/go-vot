@@ -22,7 +22,9 @@ under `cmd/vot-cli/`.
   registered with an extensible helper interface).
 - Subtitle conversion between Yandex JSON, SRT and VTT.
 - CLI: polling with progress, audio (mp3) and subtitle download, optional ffmpeg
-  muxing into the source video.
+  muxing that mixes the translation over the original audio (with a second,
+  untouched original track) — the real Yandex voice-over experience. Ducking is
+  either `classic` (constant) or `smart` (adaptive, via `sidechaincompress`).
 
 ## Install
 
@@ -52,10 +54,17 @@ vot-cli [options] <link> [link2 ...]
   --subs-srt            save subtitles as .srt (default: .vtt)
   --proxy=<url>         HTTP/HTTPS proxy URL
   --worker              route requests through the VOT worker proxy (geo bypass)
-  --video-mux[=<file|url>] mux translated audio into the source video via ffmpeg;
+  --video-mux[=<file|url>] mux the translation over the source video via ffmpeg;
                         bare --video-mux fetches the source with yt-dlp (or the
                         media URL for direct links); --video-mux=<file|url> sets
                         the source explicitly
+  --orig-volume=<0..1>  level of the original audio under the translation
+                        when muxing (default: 0.3)
+  --duck=<classic|smart> ducking mode when muxing (default: classic):
+                        classic — original at a constant --orig-volume;
+                        smart — original kept at the --orig-volume baseline and
+                        dynamically ducked (ffmpeg sidechaincompress) only while
+                        the translation is speaking
   --url-only            print the result URL without downloading
   --version             print version
 ```
