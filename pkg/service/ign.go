@@ -30,7 +30,7 @@ func ignData(ctx context.Context, f Fetcher, svc *Service, _, videoID string) (*
 
 	var vd *VideoData
 	switch {
-	case strings.Contains(body, "__NEXT_DATA__"):
+	case strings.Contains(body, `id="__NEXT_DATA__"`):
 		vd = ignByNext(body)
 	case strings.Contains(body, "icmsvideocontainer"):
 		vd = ignByIcms(body)
@@ -80,7 +80,15 @@ func ignByNext(body string) *VideoData {
 }
 
 func ignByIcms(body string) *VideoData {
-	raw := reFind(`icmsvideocontainer"[^>]*\bdata-json="([^"]*)"`, body, 1)
+	// Locate the opening tag carrying the icmsvideocontainer class (it may have
+	// other classes and the attributes may appear in any order), then read its
+	// data-json. Mirrors upstream's getElementsByClassName lookup, which matches
+	// the class token regardless of position.
+	tag := reFind(`<[^>]*\bicmsvideocontainer\b[^>]*>`, body, 0)
+	if tag == "" {
+		return nil
+	}
+	raw := reFind(`\bdata-json="([^"]*)"`, tag, 1)
 	if raw == "" {
 		return nil
 	}
@@ -99,9 +107,10 @@ func ignByIcms(body string) *VideoData {
 	return &VideoData{URL: url, Title: data.Title}
 }
 
+var ignLdJSONRe = regexp.MustCompile(`(?s)<script type="application/ld\+json"[^>]*>(.*?)</script>`)
+
 func ignByScriptData(body string) *VideoData {
-	re := regexp.MustCompile(`(?s)<script type="application/ld\+json"[^>]*>(.*?)</script>`)
-	for _, m := range re.FindAllStringSubmatch(body, -1) {
+	for _, m := range ignLdJSONRe.FindAllStringSubmatch(body, -1) {
 		if !strings.Contains(m[1], "contentUrl") {
 			continue
 		}

@@ -31,7 +31,7 @@ func bannedVideoData(ctx context.Context, f Fetcher, _ *Service, _, videoID stri
 		"variables":     map[string]string{"id": videoID},
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("bannedvideo %s: %w", videoID, err)
 	}
 
 	var resp struct {

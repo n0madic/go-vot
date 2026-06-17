@@ -42,7 +42,7 @@ func epicGamesData(ctx context.Context, f Fetcher, _ *Service, _, videoID string
 	if err != nil {
 		return nil, fmt.Errorf("epicgames %s: %w", videoID, err)
 	}
-	playlist := reFind(`videoUrl\s?=\s"([^"]+)"`, body, 1)
+	playlist := reFind(`videoUrl\s?=\s"([^"]+)"?`, body, 1)
 	if playlist == "" {
 		return nil, fmt.Errorf("epicgames %s: playlist url not found", videoID)
 	}

@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"math"
 	"net/url"
 	"regexp"
@@ -12,7 +12,10 @@ import (
 
 const yandexDiskInlinePrefix = "/i/"
 
-var yandexDiskSingleFileRe = regexp.MustCompile(`^/d/([^/]+)$`)
+var (
+	yandexDiskSingleFileRe = regexp.MustCompile(`^/d/([^/]+)$`)
+	yandexDiskExtRe        = regexp.MustCompile(`\.[^.]+$`)
+)
 
 // ydResource is one file/folder entry in a public Yandex.Disk listing.
 type ydResource struct {
@@ -137,7 +140,7 @@ func yandexDiskBodyHash(hash, sk string) []byte {
 }
 
 func yandexDiskClearTitle(name string) string {
-	return regexp.MustCompile(`\.[^.]+$`).ReplaceAllString(name, "")
+	return yandexDiskExtRe.ReplaceAllString(name, "")
 }
 
 func yandexDiskFetchList(ctx context.Context, f Fetcher, apiOrigin, dirHash, sk string) ([]ydResource, error) {
@@ -149,7 +152,7 @@ func yandexDiskFetchList(ctx context.Context, f Fetcher, apiOrigin, dirHash, sk 
 		return nil, err
 	}
 	if resp.Error != nil {
-		return nil, fmt.Errorf("yandexdisk: failed to fetch folder list")
+		return nil, errors.New("yandexdisk: failed to fetch folder list")
 	}
 	return resp.Resources, nil
 }
@@ -165,7 +168,7 @@ func yandexDiskDownloadURL(ctx context.Context, f Fetcher, apiOrigin, fileHash, 
 		return "", err
 	}
 	if resp.Error != nil || resp.Data.URL == "" {
-		return "", fmt.Errorf("yandexdisk: failed to get download url")
+		return "", errors.New("yandexdisk: failed to get download url")
 	}
 	return resp.Data.URL, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -128,6 +129,26 @@ func TestIgnDataByScriptData(t *testing.T) {
 	}
 }
 
+// TestIgnDataByIcms covers the ICMS branch where the container carries extra
+// classes around the icmsvideocontainer token (the case the prior exact-quote
+// regex missed).
+func TestIgnDataByIcms(t *testing.T) {
+	html := `<html><body>` +
+		`<div class="player-wrapper icmsvideocontainer responsive" ` +
+		`data-json="{&quot;title&quot;:&quot;ICMS Vid&quot;,&quot;mediaFiles&quot;:{&quot;360&quot;:&quot;https://ign.cdn/icms360.mp4&quot;}}"></div>` +
+		`</body></html>`
+	doer := fakeDoer{fn: func(r *http.Request) (*http.Response, error) {
+		return textResp(200, html), nil
+	}}
+	vd, err := GetVideoData(context.Background(), doer, "https://www.ign.com/videos/icms-slug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vd.URL != "https://ign.cdn/icms360.mp4" || vd.Title != "ICMS Vid" {
+		t.Fatalf("got %+v", vd)
+	}
+}
+
 func TestYandexDiskSingleFileOffline(t *testing.T) {
 	// A direct /i/ or single /d/<hash> link resolves to the public viewer URL
 	// with no HTTP call.
@@ -157,5 +178,45 @@ func TestYandexDiskFolderData(t *testing.T) {
 	}
 	if vd.URL != "https://yadi.sk/i/short" || vd.Title != "movie" || vd.Duration != 120 {
 		t.Fatalf("got %+v", vd)
+	}
+}
+
+// TestYandexDiskFolderFetchList exercises the deep-folder branch: a path with a
+// nested resourcePath (>=2 intermediate segments) triggers the fetch-list API,
+// and a resource without short_url triggers the download-url API.
+func TestYandexDiskFolderFetchList(t *testing.T) {
+	prefetch := `{"rootResourceId":"root1","environment":{"sk":"sk1"},"resources":{` +
+		`"root1":{"name":"folder","type":"dir","hash":"ROOTHASH"}}}`
+	page := `<html><body><script type="application/json" id="store-prefetch">` + prefetch + `</script></body></html>`
+	var fetchListBody, downloadBody string
+	doer := fakeDoer{fn: func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/d/HASH/a/b/movie.mp4"):
+			return textResp(200, page), nil
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/public/api/fetch-list"):
+			b, _ := io.ReadAll(r.Body)
+			fetchListBody = string(b)
+			return textResp(200, `{"resources":[{"name":"movie.mp4","type":"file","path":"/disk/a/b/movie.mp4","meta":{"mediatype":"video","videoDuration":90000}}]}`), nil
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/public/api/download-url"):
+			b, _ := io.ReadAll(r.Body)
+			downloadBody = string(b)
+			return textResp(200, `{"data":{"url":"https://downloader.disk.yandex.net/x.mp4"}}`), nil
+		}
+		t.Fatalf("unexpected request %s %s", r.Method, r.URL)
+		return nil, nil
+	}}
+	vd, err := GetVideoData(context.Background(), doer, "https://disk.yandex.ru/d/HASH/a/b/movie.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vd.URL != "https://downloader.disk.yandex.net/x.mp4" || vd.Title != "movie" || vd.Duration != 90 {
+		t.Fatalf("got %+v", vd)
+	}
+	// The folder hash is built from the root resource hash and the intermediate path.
+	if want := url.QueryEscape(`{"hash":"ROOTHASH:/a/b","sk":"sk1"}`); fetchListBody != want {
+		t.Errorf("fetch-list body = %q, want %q", fetchListBody, want)
+	}
+	if want := url.QueryEscape(`{"hash":"/disk/a/b/movie.mp4","sk":"sk1"}`); downloadBody != want {
+		t.Errorf("download-url body = %q, want %q", downloadBody, want)
 	}
 }

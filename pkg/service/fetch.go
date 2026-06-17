@@ -56,7 +56,7 @@ func getJSON(ctx context.Context, f Fetcher, rawURL string, headers map[string]s
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, out)
+	return decodeJSON(data, out)
 }
 
 // postJSON performs a POST request with the given body and decodes the JSON
@@ -66,5 +66,12 @@ func postJSON(ctx context.Context, f Fetcher, rawURL string, body []byte, header
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, out)
+	return decodeJSON(data, out)
+}
+
+// decodeJSON decodes the first JSON value in data into out, tolerating trailing
+// bytes after the value (matching the original Decoder.Decode behavior; some
+// service responses append extra content after the JSON payload).
+func decodeJSON(data []byte, out any) error {
+	return json.NewDecoder(bytes.NewReader(data)).Decode(out)
 }
