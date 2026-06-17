@@ -73,6 +73,11 @@ vot-cli [options] <link> [link2 ...]
                         smart — original kept at the --orig-volume baseline and
                         dynamically ducked (ffmpeg sidechaincompress) only while
                         the translation is speaking
+  --video-quality=<q>   max source video quality for yt-dlp when muxing:
+                        best (default), 2160, 1440, 1080, 720 or 480 — caps the
+                        downloaded resolution (smaller files, and a way around
+                        flaky 4K formats); falls back to the best stream if the
+                        cap can't be met
   --url-only            print the result URL without downloading
   --version             print version
 ```
@@ -95,6 +100,9 @@ vot-cli --worker --reslang=en https://youtu.be/dQw4w9WgXcQ
 
 # Mux translated audio into a direct .mp4 link
 vot-cli --video-mux --reslang=ru "https://example.com/clip.mp4"
+
+# Mux into a YouTube video, capping the downloaded source at 1080p
+vot-cli --video-mux --video-quality=1080 --reslang=ru https://youtu.be/dQw4w9WgXcQ
 
 # Voice cloning ("lively voice") — English→Russian, needs a Yandex OAuth token
 export YANDEX_OAUTH="y0_..."   # or VOT_TOKEN; --token overrides both
@@ -155,10 +163,12 @@ func main() {
 
 ## Extending service support
 
-Services that need site-specific HTTP scraping (e.g. Kick, Yandex.Disk) are
-registered in `pkg/service` but return `ErrNotImplemented` until a helper is
-added. To support one, add an entry to the `helpers` map in
-`pkg/service/helpers.go` implementing the `id` (and optionally `data`) function.
+Some services that need site-specific HTTP scraping (e.g. Yandex.Disk, Reddit,
+Patreon) are registered in `pkg/service` but return `ErrNotImplemented` until a
+helper is added. To support one, add an entry to the `helpers` map in
+`pkg/service/helpers.go` implementing the `id` (and optionally `data`) function;
+the `id` extractor receives a context and HTTP `Fetcher` so it can resolve ids
+that require a network round-trip (as Twitch clips and mail.ru embeds do).
 
 ## Testing
 

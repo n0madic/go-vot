@@ -60,6 +60,15 @@ func TestVideoIDExtraction(t *testing.T) {
 		{"nine_gag", "https://9gag.com/gag/aZ1bC", "aZ1bC"},
 		{"googledrive", "https://drive.google.com/file/d/FILEID/view", "FILEID"},
 		{"vimeo", "https://vimeo.com/123456789", "123456789"},
+		// twitch — path-parse only (no network)
+		{"twitch", "https://www.twitch.tv/videos/12345", "videos/12345"},
+		{"twitch", "https://www.twitch.tv/channel/clip/SomeClipSlug", "channel/clip/SomeClipSlug"},
+		{"twitch", "https://player.twitch.tv/?video=v123", "videos/v123"},
+		// mailru — /v/ branch
+		{"mailru", "https://my.mail.ru/v/channel/video/123.html", "v/channel/video/123.html"},
+		// kick — path-parse only
+		{"kick", "https://kick.com/somechannel/videos/abc-def", "videos/abc-def"},
+		{"kick", "https://kick.com/somechannel/clips/clip_xyz", "clips/clip_xyz"},
 	}
 	for _, c := range cases {
 		h, ok := helpers[c.host]
@@ -68,7 +77,7 @@ func TestVideoIDExtraction(t *testing.T) {
 			continue
 		}
 		u, _ := url.Parse(c.url)
-		got, err := h.id(u)
+		got, err := h.id(context.Background(), nil, u)
 		if err != nil {
 			t.Errorf("%s id(%q) error: %v", c.host, c.url, err)
 			continue

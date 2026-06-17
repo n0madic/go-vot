@@ -16,13 +16,24 @@ func ytdlpAvailable() bool {
 	return err == nil
 }
 
+// ytdlpFormat builds the yt-dlp -f selector for a maximum video height. maxHeight
+// 0 means "best" (no cap). With a cap it prefers streams at or below the height
+// and falls back to the best available if none qualify.
+func ytdlpFormat(maxHeight int) string {
+	if maxHeight <= 0 {
+		return "bv*+ba/b"
+	}
+	return fmt.Sprintf("bv*[height<=%d]+ba/b[height<=%d]/bv*+ba/b", maxHeight, maxHeight)
+}
+
 // ytdlpDownload fetches the source video with yt-dlp into outDir using baseName
 // (the extension is chosen by yt-dlp) and returns the path to the downloaded
-// file. It selects the best video+audio and merges with ffmpeg.
-func ytdlpDownload(ctx context.Context, link, outDir, baseName string) (string, error) {
+// file. It selects video+audio capped at maxHeight (0 = best) and merges with
+// ffmpeg.
+func ytdlpDownload(ctx context.Context, link, outDir, baseName string, maxHeight int) (string, error) {
 	outTmpl := filepath.Join(outDir, baseName+".%(ext)s")
 	args := []string{
-		"-f", "bv*+ba/b",
+		"-f", ytdlpFormat(maxHeight),
 		"--no-playlist",
 		"--retries", "10",
 		"--fragment-retries", "10",

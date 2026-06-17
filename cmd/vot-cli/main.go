@@ -14,13 +14,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/n0madic/go-vot/pkg/client"
 	"github.com/n0madic/go-vot/pkg/config"
 	"github.com/n0madic/go-vot/pkg/lang"
-	"github.com/n0madic/go-vot/pkg/service"
 	"github.com/n0madic/go-vot/pkg/subs"
 	"github.com/n0madic/go-vot/pkg/vot"
 )
@@ -45,35 +45,27 @@ func (m *videoMux) Set(s string) error {
 // IsBoolFlag lets the flag be used without a value (bare --video-mux).
 func (m *videoMux) IsBoolFlag() bool { return true }
 
-func clientSubtitlesParams(vd *service.VideoData, requestLang string) client.SubtitlesParams {
-	return client.SubtitlesParams{
-		URL:         vd.URL,
-		VideoID:     vd.VideoID,
-		Host:        vd.Host,
-		RequestLang: requestLang,
-	}
-}
-
 const version = "0.1.0"
 
 func main() {
 	var (
-		flagLang       = flag.String("lang", "auto", "source video language")
-		flagResLang    = flag.String("reslang", "ru", "target (TTS) language: ru, en or kk")
-		flagOutput     = flag.String("output", ".", "directory to save files into")
-		flagOutputFile = flag.String("output-file", "", "output filename (requires --output; ignored for multiple links)")
-		flagBatchFile  = flag.String("batch-file", "", "read video links from a file, one per line (# comments and blank lines ignored)")
-		flagSubs       = flag.Bool("subs", false, "download subtitles instead of audio")
-		flagSubsSrt    = flag.Bool("subs-srt", false, "save subtitles as .srt (default: .vtt)")
-		flagProxy      = flag.String("proxy", "", "HTTP/HTTPS proxy URL")
-		flagWorker     = flag.Bool("worker", false, "route requests through the VOT worker proxy (geo bypass)")
-		flagClone      = flag.Bool("clone", false, "use Yandex voice cloning (\"lively voice\"): requires --token and only works en→ru")
-		flagToken      = flag.String("token", "", "Yandex account OAuth token for --clone (falls back to $VOT_TOKEN or $YANDEX_OAUTH)")
-		flagOrigVolume = flag.Float64("orig-volume", 0.3, "level of the original audio under the translation when muxing (0–1)")
-		flagDuck       = flag.String("duck", "classic", "ducking mode when muxing: \"classic\" (constant) or \"smart\" (adaptive, ffmpeg sidechaincompress)")
-		flagClean      = flag.Bool("clean", false, "after muxing, delete the intermediate files (downloaded audio and source), keeping only the final video (named <title>.mp4)")
-		flagURLOnly    = flag.Bool("url-only", false, "print the result URL without downloading")
-		flagVersion    = flag.Bool("version", false, "print version and exit")
+		flagLang         = flag.String("lang", "auto", "source video language")
+		flagResLang      = flag.String("reslang", "ru", "target (TTS) language: ru, en or kk")
+		flagOutput       = flag.String("output", ".", "directory to save files into")
+		flagOutputFile   = flag.String("output-file", "", "output filename (requires --output; ignored for multiple links)")
+		flagBatchFile    = flag.String("batch-file", "", "read video links from a file, one per line (# comments and blank lines ignored)")
+		flagSubs         = flag.Bool("subs", false, "download subtitles instead of audio")
+		flagSubsSrt      = flag.Bool("subs-srt", false, "save subtitles as .srt (default: .vtt)")
+		flagProxy        = flag.String("proxy", "", "HTTP/HTTPS proxy URL")
+		flagWorker       = flag.Bool("worker", false, "route requests through the VOT worker proxy (geo bypass)")
+		flagClone        = flag.Bool("clone", false, "use Yandex voice cloning (\"lively voice\"): requires --token and only works en→ru")
+		flagToken        = flag.String("token", "", "Yandex account OAuth token for --clone (falls back to $VOT_TOKEN or $YANDEX_OAUTH)")
+		flagOrigVolume   = flag.Float64("orig-volume", 0.3, "level of the original audio under the translation when muxing (0–1)")
+		flagDuck         = flag.String("duck", "classic", "ducking mode when muxing: \"classic\" (constant) or \"smart\" (adaptive, ffmpeg sidechaincompress)")
+		flagClean        = flag.Bool("clean", false, "after muxing, delete the intermediate files (downloaded audio and source), keeping only the final video (named <title>.mp4)")
+		flagURLOnly      = flag.Bool("url-only", false, "print the result URL without downloading")
+		flagVideoQuality = flag.String("video-quality", "best", "max source video quality for yt-dlp when muxing: best, 2160, 1440, 1080, 720 or 480")
+		flagVersion      = flag.Bool("version", false, "print version and exit")
 	)
 
 	// --video-mux takes an optional value: bare --video-mux enables muxing with
@@ -130,6 +122,10 @@ func main() {
 	if *flagDuck != "classic" && *flagDuck != "smart" {
 		fatal(fmt.Errorf("--duck must be \"classic\" or \"smart\", got %q", *flagDuck))
 	}
+	videoQuality, err := parseVideoQuality(*flagVideoQuality)
+	if err != nil {
+		fatal(err)
+	}
 	if *flagClean && !muxFlag.set {
 		fmt.Fprintln(os.Stderr, "warning: --clean has no effect without --video-mux")
 	}
@@ -168,20 +164,21 @@ func main() {
 	defer stop()
 
 	app := &app{
-		v:          v,
-		http:       httpClient,
-		lang:       *flagLang,
-		resLang:    *flagResLang,
-		output:     *flagOutput,
-		outputFile: outputFile,
-		subsSrt:    subsSrt,
-		mux:        muxFlag.set,
-		video:      muxFlag.source,
-		origVolume: *flagOrigVolume,
-		duckSmart:  *flagDuck == "smart",
-		clone:      *flagClone,
-		clean:      *flagClean,
-		urlOnly:    *flagURLOnly,
+		v:            v,
+		http:         httpClient,
+		lang:         *flagLang,
+		resLang:      *flagResLang,
+		output:       *flagOutput,
+		outputFile:   outputFile,
+		subsSrt:      subsSrt,
+		mux:          muxFlag.set,
+		video:        muxFlag.source,
+		origVolume:   *flagOrigVolume,
+		duckSmart:    *flagDuck == "smart",
+		clone:        *flagClone,
+		clean:        *flagClean,
+		urlOnly:      *flagURLOnly,
+		videoQuality: videoQuality,
 	}
 
 	exitCode := 0
@@ -229,20 +226,21 @@ func readLinksFile(path string) ([]string, error) {
 }
 
 type app struct {
-	v          *vot.Client
-	http       *http.Client
-	lang       string
-	resLang    string
-	output     string
-	outputFile string
-	subsSrt    bool
-	mux        bool
-	video      string
-	origVolume float64
-	duckSmart  bool
-	clone      bool
-	clean      bool
-	urlOnly    bool
+	v            *vot.Client
+	http         *http.Client
+	lang         string
+	resLang      string
+	output       string
+	outputFile   string
+	subsSrt      bool
+	mux          bool
+	video        string
+	origVolume   float64
+	duckSmart    bool
+	clone        bool
+	clean        bool
+	urlOnly      bool
+	videoQuality int // max source video height for yt-dlp; 0 = best
 }
 
 func (a *app) processAudio(ctx context.Context, link string) error {
@@ -301,7 +299,7 @@ func (a *app) processAudio(ctx context.Context, link string) error {
 				videoSource = res.VideoData.URL
 			case ytdlpAvailable():
 				fmt.Println("  downloading source video with yt-dlp...")
-				p, err := ytdlpDownload(ctx, ytdlpSourceURL(res.VideoData, link), a.output, name+".source")
+				p, err := ytdlpDownload(ctx, ytdlpSourceURL(res.VideoData, link), a.output, name+".source", a.videoQuality)
 				if err != nil {
 					return err
 				}
@@ -353,14 +351,40 @@ func (a *app) processAudio(ctx context.Context, link string) error {
 	return nil
 }
 
+// pickSubtitleTrack chooses which subtitle track to download: it prefers a track
+// translated into resLang, falling back to the first track's translation, and
+// finally to the original (untranslated) track. It returns the chosen URL and
+// the language to tag the output file with.
+func pickSubtitleTrack(tracks []client.SubtitleTrack, resLang string) (url, lang string) {
+	if len(tracks) == 0 {
+		return "", ""
+	}
+	track := tracks[0]
+	for _, s := range tracks {
+		if s.TranslatedLanguage == resLang && s.TranslatedURL != "" {
+			track = s
+			break
+		}
+	}
+	if track.TranslatedURL != "" {
+		return track.TranslatedURL, track.TranslatedLanguage
+	}
+	return track.URL, track.Language
+}
+
 func (a *app) processSubtitles(ctx context.Context, link string) error {
 	fmt.Printf("→ %s\n", link)
 
+	// Resolve video data up front for the output-file title (cheap/offline for
+	// YouTube). Subtitles are polled separately so the server has time to
+	// generate them.
 	vd, err := a.v.GetVideoData(ctx, link)
 	if err != nil {
 		return err
 	}
-	result, err := a.v.Raw().GetSubtitles(ctx, clientSubtitlesParams(vd, a.lang))
+	result, err := a.v.GetSubtitlesWait(ctx, link, a.lang, func() {
+		fmt.Println("  subtitles are still being generated, waiting...")
+	})
 	if err != nil {
 		return err
 	}
@@ -371,20 +395,7 @@ func (a *app) processSubtitles(ctx context.Context, link string) error {
 		return errors.New("no subtitles available")
 	}
 
-	// Prefer a track translated into the target language, else the first one.
-	track := result.Subtitles[0]
-	for _, s := range result.Subtitles {
-		if s.TranslatedLanguage == a.resLang && s.TranslatedURL != "" {
-			track = s
-			break
-		}
-	}
-	srcURL := track.TranslatedURL
-	srcLang := track.TranslatedLanguage
-	if srcURL == "" {
-		srcURL = track.URL
-		srcLang = track.Language
-	}
+	srcURL, srcLang := pickSubtitleTrack(result.Subtitles, a.resLang)
 
 	raw, err := fetchBytes(ctx, a.http, srcURL)
 	if err != nil {
@@ -439,6 +450,20 @@ func fileNameOr(name, def string) string {
 		return name
 	}
 	return def
+}
+
+// parseVideoQuality maps the --video-quality flag to a yt-dlp max height. "best"
+// (or empty) means no cap (0); otherwise the value must be a positive integer
+// number of vertical pixels (e.g. 1080).
+func parseVideoQuality(s string) (int, error) {
+	if s == "" || s == "best" {
+		return 0, nil
+	}
+	h, err := strconv.Atoi(s)
+	if err != nil || h <= 0 {
+		return 0, fmt.Errorf("--video-quality must be \"best\" or a positive height (e.g. 1080), got %q", s)
+	}
+	return h, nil
 }
 
 func firstNonEmpty(values ...string) string {

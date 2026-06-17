@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -11,7 +12,7 @@ import (
 // helper bundles a video-id extractor and an optional extra-data fetcher for a
 // service. Add an entry to the helpers map to support a new service.
 type helper struct {
-	id   func(u *url.URL) (string, error)
+	id   func(ctx context.Context, f Fetcher, u *url.URL) (string, error)
 	data func(ctx context.Context, f Fetcher, svc *Service, origin, videoID string) (*VideoData, error)
 }
 
@@ -26,7 +27,7 @@ func reFind(pattern, s string, index int) string {
 
 // --- id extractors (ported from @vot.js/node/helpers/*.js) --------------------
 
-func ytID(u *url.URL) (string, error) {
+func ytID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 	if u.Hostname() == "youtu.be" {
 		return strings.TrimPrefix(u.Path, "/"), nil
 	}
@@ -36,7 +37,7 @@ func ytID(u *url.URL) (string, error) {
 	return u.Query().Get("v"), nil
 }
 
-func vkID(u *url.URL) (string, error) {
+func vkID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 	if m := reFind(`^/(video|clip)-?\d+_\d+$`, u.Path, 0); m != "" {
 		return strings.TrimPrefix(m, "/"), nil
 	}
@@ -59,23 +60,24 @@ func vkID(u *url.URL) (string, error) {
 	return "", nil
 }
 
-func twitchID(u *url.URL) (string, error) {
+func twitchID(ctx context.Context, f Fetcher, u *url.URL) (string, error) {
 	if regexp.MustCompile(`^player\.twitch\.tv$`).MatchString(u.Hostname()) {
 		return "videos/" + u.Query().Get("video"), nil
 	}
 	if clip := reFind(`([^/]+)/(?:clip)/([^/]+)`, u.Path, 0); clip != "" {
 		return clip, nil
 	}
-	// clips.twitch.tv requires an HTTP round-trip to resolve the channel; not
-	// ported. Fall back to the videos path when present.
+	if u.Hostname() == "clips.twitch.tv" {
+		return twitchClipLink(ctx, f, u)
+	}
 	return reFind(`(?:videos)/([^/]+)`, u.Path, 0), nil
 }
 
-func tiktokID(u *url.URL) (string, error) {
+func tiktokID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 	return reFind(`([^/]+)/video/([^/]+)`, u.Path, 0), nil
 }
 
-func vimeoID(u *url.URL) (string, error) {
+func vimeoID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 	embedID := reFind(`video/[^/]+$`, u.Path, 0)
 	if embedID != "" {
 		videoID := strings.TrimPrefix(embedID, "video/")
@@ -96,15 +98,30 @@ func vimeoID(u *url.URL) (string, error) {
 	return strings.TrimPrefix(u.Path, "/"), nil
 }
 
-func mailruID(u *url.URL) (string, error) {
+func mailruID(ctx context.Context, f Fetcher, u *url.URL) (string, error) {
 	if regexp.MustCompile(`/(v|mail|bk|inbox)/`).MatchString(u.Path) {
 		return strings.TrimPrefix(u.Path, "/"), nil
 	}
-	// The /video/embed/<id> case needs an HTTP meta lookup; not ported.
-	return "", nil
+	videoID := reFind(`video/embed/([^/]+)`, u.Path, 1)
+	if videoID == "" {
+		return "", nil
+	}
+	var meta struct {
+		Meta struct {
+			URL string `json:"url"`
+		} `json:"meta"`
+	}
+	metaURL := "https://my.mail.ru/+/video/meta/" + videoID + "?ajax_call=1&ext=1"
+	if err := getJSON(ctx, f, metaURL, nil, &meta); err != nil {
+		return "", err
+	}
+	if meta.Meta.URL == "" {
+		return "", fmt.Errorf("empty meta url for mailru embed %s", videoID)
+	}
+	return strings.TrimPrefix(meta.Meta.URL, "//my.mail.ru/"), nil
 }
 
-func bilibiliID(u *url.URL) (string, error) {
+func bilibiliID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 	if b := reFind(`bangumi/play/([^/]+)`, u.Path, 0); b != "" {
 		return b, nil
 	}
@@ -118,7 +135,7 @@ func bilibiliID(u *url.URL) (string, error) {
 	return vid, nil
 }
 
-func trovoID(u *url.URL) (string, error) {
+func trovoID(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 	vid := u.Query().Get("vid")
 	path := reFind(`([^/]+)/([\d]+)`, u.Path, 0)
 	if vid == "" || path == "" {
@@ -128,7 +145,9 @@ func trovoID(u *url.URL) (string, error) {
 }
 
 // pathSlice returns the path without its leading slash.
-func pathSlice(u *url.URL) (string, error) { return strings.TrimPrefix(u.Path, "/"), nil }
+func pathSlice(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+	return strings.TrimPrefix(u.Path, "/"), nil
+}
 
 // helpers maps a service host to its extractor(s). Only services with an entry
 // here can resolve a video id; the rest return ErrNotImplemented.
@@ -139,43 +158,78 @@ var helpers = map[string]helper{
 	"poketube":  {id: ytID},
 	"ricktube":  {id: ytID},
 	"vk":        {id: vkID},
-	"nine_gag":  {id: func(u *url.URL) (string, error) { return reFind(`gag/([^/]+)`, u.Path, 1), nil }},
-	"twitch":    {id: twitchID},
-	"proxitok":  {id: tiktokID},
-	"tiktok":    {id: tiktokID},
-	HostVimeo:   {id: vimeoID, data: vimeoData},
-	"xvideos":   {id: func(u *url.URL) (string, error) { return reFind(`[^/]+/[^/]+$`, u.Path, 0), nil }},
-	"pornhub": {id: func(u *url.URL) (string, error) {
+	"nine_gag": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`gag/([^/]+)`, u.Path, 1), nil
+	}},
+	"twitch":   {id: twitchID},
+	"proxitok": {id: tiktokID},
+	"tiktok":   {id: tiktokID},
+	HostVimeo:  {id: vimeoID, data: vimeoData},
+	"xvideos": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`[^/]+/[^/]+$`, u.Path, 0), nil
+	}},
+	"pornhub": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 		if vk := u.Query().Get("viewkey"); vk != "" {
 			return vk, nil
 		}
 		return reFind(`embed/([^/]+)`, u.Path, 1), nil
 	}},
-	"twitter":  {id: func(u *url.URL) (string, error) { return reFind(`status/([^/]+)`, u.Path, 1), nil }},
+	"twitter": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`status/([^/]+)`, u.Path, 1), nil
+	}},
 	"rumble":   {id: pathSlice},
 	"facebook": {id: pathSlice},
-	"rutube":   {id: func(u *url.URL) (string, error) { return reFind(`(?:video|embed)/([^/]+)`, u.Path, 1), nil }},
+	"rutube": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`(?:video|embed)/([^/]+)`, u.Path, 1), nil
+	}},
 	"bilibili": {id: bilibiliID},
 	"mailru":   {id: mailruID},
-	"bitchute": {id: func(u *url.URL) (string, error) { return reFind(`(video|embed)/([^/]+)`, u.Path, 2), nil }},
-	"eporner":  {id: func(u *url.URL) (string, error) { return reFind(`video-([^/]+)/([^/]+)`, u.Path, 0), nil }},
-	"dailymotion": {id: func(u *url.URL) (string, error) {
+	"bitchute": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`(video|embed)/([^/]+)`, u.Path, 2), nil
+	}},
+	"eporner": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`video-([^/]+)/([^/]+)`, u.Path, 0), nil
+	}},
+	"dailymotion": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
 		if u.Hostname() == "dai.ly" {
 			return strings.TrimPrefix(u.Path, "/"), nil
 		}
 		return reFind(`video/([^/]+)`, u.Path, 1), nil
 	}},
-	"trovo":       {id: trovoID},
-	"okru":        {id: func(u *url.URL) (string, error) { return reFind(`/video/(\d+)`, u.Path, 1), nil }},
-	"googledrive": {id: func(u *url.URL) (string, error) { return reFind(`/file/d/([^/]+)`, u.Path, 1), nil }},
-	"newgrounds":  {id: func(u *url.URL) (string, error) { return reFind(`([^/]+)/(view)/([^/]+)`, u.Path, 0), nil }},
-	"egghead":     {id: pathSlice},
-	"youku":       {id: func(u *url.URL) (string, error) { return reFind(`v_show/id_[\w=]+`, u.Path, 0), nil }},
-	"archive":     {id: func(u *url.URL) (string, error) { return reFind(`(details|embed)/([^/]+)`, u.Path, 2), nil }},
-	"watchpornto": {id: func(u *url.URL) (string, error) { return reFind(`(video|embed)/(\d+)(/[^/]+/)?`, u.Path, 0), nil }},
-	"dzen":        {id: func(u *url.URL) (string, error) { return reFind(`video/watch/([^/]+)`, u.Path, 1), nil }},
-	"loom":        {id: func(u *url.URL) (string, error) { return reFind(`(embed|share)/([^/]+)?`, u.Path, 2), nil }},
-	"imdb":        {id: func(u *url.URL) (string, error) { return reFind(`video/([^/]+)`, u.Path, 1), nil }},
-	"thisvid":     {id: func(u *url.URL) (string, error) { return reFind(`(videos|embed)/[^/]+`, u.Path, 0), nil }},
-	"telegram":    {id: func(u *url.URL) (string, error) { return reFind(`([^/]+)/(\d+)`, u.Path, 0), nil }},
+	"trovo": {id: trovoID},
+	"okru": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`/video/(\d+)`, u.Path, 1), nil
+	}},
+	"googledrive": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`/file/d/([^/]+)`, u.Path, 1), nil
+	}},
+	"newgrounds": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`([^/]+)/(view)/([^/]+)`, u.Path, 0), nil
+	}},
+	"egghead": {id: pathSlice},
+	"youku": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`v_show/id_[\w=]+`, u.Path, 0), nil
+	}},
+	"archive": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`(details|embed)/([^/]+)`, u.Path, 2), nil
+	}},
+	"watchpornto": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`(video|embed)/(\d+)(/[^/]+/)?`, u.Path, 0), nil
+	}},
+	"dzen": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`video/watch/([^/]+)`, u.Path, 1), nil
+	}},
+	"loom": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`(embed|share)/([^/]+)?`, u.Path, 2), nil
+	}},
+	"imdb": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`video/([^/]+)`, u.Path, 1), nil
+	}},
+	"thisvid": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`(videos|embed)/[^/]+`, u.Path, 0), nil
+	}},
+	"telegram": {id: func(_ context.Context, _ Fetcher, u *url.URL) (string, error) {
+		return reFind(`([^/]+)/(\d+)`, u.Path, 0), nil
+	}},
+	"kick": {id: kickID, data: kickData},
 }

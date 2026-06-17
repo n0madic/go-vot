@@ -90,7 +90,7 @@ func GetVideoData(ctx context.Context, f Fetcher, rawURL string) (*VideoData, er
 
 	var videoID string
 	if h, ok := helpers[svc.Host]; ok && h.id != nil {
-		videoID, err = h.id(u)
+		videoID, err = h.id(ctx, f, u)
 		if err != nil {
 			return nil, err
 		}

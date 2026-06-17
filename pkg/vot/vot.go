@@ -42,6 +42,11 @@ type Options struct {
 	Timeout      time.Duration
 	Worker       bool
 	APIToken     string
+	// Doer overrides the HTTP client. When set it is shared as both the API
+	// client transport and the service data fetcher (a single Do method
+	// satisfies both interfaces), and Proxy/Timeout are ignored. Mainly a test
+	// seam for driving Translate/GetVideoData offline.
+	Doer client.Doer
 }
 
 // Client is the high-level VOT translator.
@@ -51,14 +56,26 @@ type Client struct {
 }
 
 // New builds a Client. A single HTTP client (honoring Proxy/Timeout) is shared
-// between the API client and the service data fetcher.
+// between the API client and the service data fetcher. When opts.Doer is set it
+// is used for both instead, bypassing Proxy/Timeout.
 func New(opts Options) (*Client, error) {
-	httpClient, err := buildHTTPClient(opts.Proxy, opts.Timeout)
-	if err != nil {
-		return nil, err
+	var doer client.Doer
+	var fetcher service.Fetcher
+	if opts.Doer != nil {
+		// A single Do(*http.Request) (*http.Response, error) satisfies both the
+		// client.Doer and service.Fetcher interfaces.
+		doer = opts.Doer
+		fetcher = opts.Doer
+	} else {
+		httpClient, err := buildHTTPClient(opts.Proxy, opts.Timeout)
+		if err != nil {
+			return nil, err
+		}
+		doer = httpClient
+		fetcher = httpClient
 	}
 	c, err := client.New(client.Options{
-		Doer:         httpClient,
+		Doer:         doer,
 		RequestLang:  opts.RequestLang,
 		ResponseLang: opts.ResponseLang,
 		Worker:       opts.Worker,
@@ -67,7 +84,7 @@ func New(opts Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{c: c, fetcher: httpClient}, nil
+	return &Client{c: c, fetcher: fetcher}, nil
 }
 
 func buildHTTPClient(proxy string, timeout time.Duration) (*http.Client, error) {
@@ -191,6 +208,55 @@ func (v *Client) GetSubtitles(ctx context.Context, rawURL, requestLang string) (
 		Host:        vd.Host,
 		RequestLang: requestLang,
 	})
+}
+
+const (
+	// subtitlesPollInterval is how long to wait between subtitle polls while the
+	// server is still generating them.
+	subtitlesPollInterval = 30 * time.Second
+	// subtitlesMaxAttempts caps the number of subtitle polls before giving up.
+	subtitlesMaxAttempts = 5
+)
+
+// GetSubtitlesWait is like GetSubtitles but, when the server reports the
+// subtitles are still being generated (Waiting with no tracks yet), it polls
+// every ~30s up to a few times (or until ctx is cancelled). onWait, if set, is
+// called before each wait. It returns the last result once tracks appear, the
+// server stops waiting, or the attempts are exhausted.
+func (v *Client) GetSubtitlesWait(ctx context.Context, rawURL, requestLang string, onWait func()) (*client.SubtitlesResult, error) {
+	vd, err := v.GetVideoData(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	params := client.SubtitlesParams{
+		URL:         vd.URL,
+		VideoID:     vd.VideoID,
+		Host:        vd.Host,
+		RequestLang: requestLang,
+	}
+
+	var result *client.SubtitlesResult
+	for attempt := 0; attempt < subtitlesMaxAttempts; attempt++ {
+		result, err = v.c.GetSubtitles(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		if !result.Waiting || len(result.Subtitles) > 0 {
+			return result, nil
+		}
+		if attempt == subtitlesMaxAttempts-1 {
+			break // exhausted: return the last (still-waiting) result
+		}
+		if onWait != nil {
+			onWait()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(subtitlesPollInterval):
+		}
+	}
+	return result, nil
 }
 
 func toProtoHelp(h []service.TranslationHelp) []yaproto.TranslationHelp {
